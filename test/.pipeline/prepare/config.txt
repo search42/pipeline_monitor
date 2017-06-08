@@ -1,0 +1,31 @@
+####################################################################
+##config 文件
+####################################################################
+[project_special]
+Rawdatadir      =/data/project/NCRNA/HN16020321/prepare/data
+#实验设计!注意沟通
+SampleInfo      =/data/project/NCRNA/HN16020321/test/prepare/sampleinfo.xls
+ContrastFile    =/data/project/NCRNA/HN16020321/test/prepare/contrasts.list
+#测序
+SeqenceLen      =150
+Quality         =33
+#建库
+IsStrandSpecific=yes
+
+[species_special]
+Genome          =/data/database/ftp.ensembl.org/release-81/homo_sapiens/Homo_sapiens.GRCh38.dna_sm.toplevel.filter.fa
+GenomeSTARindex =/data/database/ftp.ensembl.org/release-81/homo_sapiens/STAR-index/
+GTF             =/data/database/ftp.ensembl.org/release-81/homo_sapiens/Homo_sapiens.GRCh38.81.filter.gtf
+GTFtype         =gtf
+mRNA            =0
+Pep             =0
+#数据库
+LncRNA_PredictDB=Human
+ # Human ## or Fly  Mouse Zebrafish  or all
+BlastNR_DB      =/data/database/nr/current/NR_MAM
+            #根据物种信息选择,参见/data/database/nr/README.txt
+BlastKO_DB      =/data/database/KEGG/Current/Animals
+#已知
+BlastNR_Result  =0
+BlastKO_Result  =0
+IPr_Result      =0

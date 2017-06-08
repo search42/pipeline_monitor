@@ -1,0 +1,62 @@
+#!/usr/bin/env python
+import sys
+"""do qsub -l ncpus=16 -l mem=250G $i  """
+from optparse import OptionParser,OptionGroup
+import time
+import re
+
+usage = "usage: %prog [options] commands" 
+description = "Contact: Rong Zhengqin <rongzhengqin@honortech.cn>"
+parser = OptionParser(usage,version="%prog 0.1",description = description)
+Common_group = OptionGroup(parser,'Common Options')
+
+Common_group.add_option('-t',dest='threads',help='number of threads used, default=1',metavar='INT',type='int',default=1)
+Common_group.add_option('-m',dest='mem',help='number of memory(G or M) used, default=10M',metavar='STR',type='string',default="10M")
+Common_group.add_option('-s',dest="scriptname",help='script name prefix, default=run',metavar='STR',type='string',default="run")
+Common_group.add_option('-n',dest="node",help='assign task to a node[cu01-cu08],default is random',metavar='STR',type='string',default=None)
+
+parser.add_option_group(Common_group)
+
+
+(options, args) = parser.parse_args()
+
+if len(args) <= 0:
+	parser.print_help()
+	exit(1)
+time.sleep(0.1)
+scriptname = options.scriptname + "."+ str(int(time.time()*10)%1000000) + ".sh"
+mem = options.mem
+threads = int(options.threads)
+
+cmd = " ".join(args[0:])
+flag = 0
+if cmd.endswith(".sh"):
+	#f = file(scriptname,"w")
+	scriptname = cmd
+	cmd = file(scriptname,"r").read().strip()
+f = file(scriptname,"w")
+'''
+if not re.search(r'[\s]2>',cmd):
+	cmd += " 2>%s.e"%scriptname
+if (not re.search(r'[\s]1>',cmd) ) and (not re.search(r'[\s]>',cmd)):
+	cmd += " 1>%s.o"%scriptname
+'''
+cmd += "\necho ==[OK]==\n"
+f.write(cmd + "\n")
+f.close()
+
+
+import commands
+if options.node == None:
+	(exitstatus, outtext) = commands.getstatusoutput("qsub -V -d ./ -l ncpus=%d  -l mem=%s %s"%(threads,mem,scriptname))
+else:
+	(exitstatus, outtext) = commands.getstatusoutput("qsub -V -d ./ -l ncpus=%d -l host=%s  -l mem=%s %s"%(threads,options.node,mem,scriptname))
+
+if exitstatus == 0:
+	sys.stderr.write("[Info] qsub job submitted. Job ID is : %s. Script file is: %s\nSTDERR file is: %s.e, STDOUT file is: %s.o\n"%(outtext,scriptname,scriptname,scriptname))
+	exit(0)
+else:
+	sys.stderr.write("[Error] qsub error: %s\n"%outtext.strip())
+	exit(1)
+
+

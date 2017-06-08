@@ -1,0 +1,35 @@
+##################################################################
+##流程脚本
+##################################################################
+#Label=a.1 qsub=yes [yes,no,yet] ncpus=1 mem=2G workpath=%(outdir)s/1.1 #host=               #通过行首#对下行命令的运行参数进行定制,qusb到集群
+echo command1.1 %(c1)s %(c6)s && sleep 10
+#Label=a.2 qsub=yet      [yet] ncpus=1 mem=2G workpath=%(outdir)s/1.2 #host=                 #以commands调用,并获取job id
+doqsub "echo command1.2 %(c1)s && sleep 20"
+     #
+
+``` Label=a.3 qsub=yet      [yet] ncpus=1 mem=2G workpath=%(outdir)s/1.3 #host=              #支持多任务投递
+for i in {1..5};do echo echo command1.3.${i} %(c1)s >test1.3.${i}.sh;done
+ls test1.3*sh |while read i;do doqsub ${i};done
+```
+
+#Label=b qsub=no  [yes,no,yet] ncpus=1 mem=2G workpath=%(outdir)s/2 #host=                   #以commands调用,commands.getstatusoutput
+echo command2 %(c2)s
+
+``` Label=c qsub=yes [yes,no,yet] ncpus=1 mem=2G  workpath=%(outdir)s/3                      #```为#的多行形式，```之后未紧跟python等字样，则使用sh解释器
+"echo command3.1 %s "%( "ta" if 1<0 else 'zsc')                                              #command3 %s 为可修改的命令,sh执行;%s 不能与%(c3)s同时出现
+echo command3.2 %(c3)s
+```
+
+```python Label=d qsub=exec  [yes,no,yet,exec] ncpus=1 mem=3G workpath=%(outdir)s/4          #以python 执行,暂不支持其它语言
+  #comand4 注释                                                                              #在```内#不能在行首
+global test_string                                                                           #为后面的命令传参
+if len('%(outdir)s') >5:
+  print "length of outdir gt 5 %(c4)s"
+  test_string="{C4} length of outdir gt 5 %(c4)s"               
+else:
+  print "ength of outdir lt 5 %(c5)s %(c6)s"
+  test_string="{C4} length of outdir lt 5 %(c4)s"
+```
+
+#Label=e qsub=yes [yes,no,yet] ncpus=1 mem=1G workpath=%(outdir)s/5 require_job=a.1,a.2,b,c,d  #等待a.1,a.2,b,c,d任务执行完毕，才会执行此命令
+"echo command5 %s %s "%(test_string,test_string2) + "%(c5)s"                                                   #若同时使用%s 、%(c5)s两种格式化方法，可用+分开,

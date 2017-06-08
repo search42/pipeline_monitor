@@ -1,0 +1,4 @@
+##sampleinfo				
+#SN	file	samplename	classid	classname
+Fresh_NK	Fresh_HYYLYCCXX_L7_1.clean.fq.gz,Fresh_HYYLYCCXX_L7_2.clean.fq.gz	Fresh_NK	1	Fresh_NK
+Ex_NK	EX_HYYLYCCXX_L7_1.clean.fq.gz,EX_HYYLYCCXX_L7_2.clean.fq.gz	Ex_NK	2	Ex_NK

@@ -1,0 +1,8 @@
+#!/usr/bin/env  python
+#coding=utf-8
+from pipeline_monitor import pipeline_monitor
+import sys,os
+
+unbuffered = os.fdopen(sys.stdout.fileno(), 'w', 0)
+sys.stdout = unbuffered
+pipeline_monitor.main()
