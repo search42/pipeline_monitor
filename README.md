@@ -1,7 +1,24 @@
 `自动化` `任务断点续做` `查错`
 
 # 1.概述 #
-实现[**流程自动化**]，[**断点续做**]，[**查错**] 功能。程序需指定输出目录*outdir*,另需要*2个文件*：
+实现[**流程自动化**]，[**断点续做**]，[**查错**] 功能。运行方式如下：
+```
+$ run_pipeline
+```
+    
+    Usage: run_pipeline [options] pipeline
+
+    Contact: search42 <search42zh>
+    
+    Options:
+      --version   show program's version number and exit
+      -h, --help  show this help message and exit
+
+    Common Options:
+      -f FILE   config file for pipeline
+      -o DIR    outdir of flow, default=./
+
+程序需指定输出目录*outdir*,另需要*2个文件*：
 
 1. [格式化的流程脚本](https://github.com/search42/pipeline_monitor/blob/master/test/test_pipe_parameter.txt)
     - 配置运行方式**qsub** 可选 [*yes, yet, no, exec* ]
@@ -84,7 +101,7 @@ $ python setup.py install
 ```
 to test:
 ```
-$ run_pipeline  -f test_config.txt -o test_out/ test_pipe.txt
+$ run_pipeline  -f test_config.txt -o test_out/ test_pipe_parameter.txt
 ```
 
     [Pipe] start... 2016-09-19 14:03:12
