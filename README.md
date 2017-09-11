@@ -8,7 +8,7 @@ $ run_pipeline
     
     Usage: run_pipeline [options] pipeline
 
-    Contact: search42 <search42zh>
+    Contact: search42 <search42zh@gmail.com>
     
     Options:
       --version   show program's version number and exit
