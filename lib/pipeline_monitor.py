@@ -298,7 +298,7 @@ class pipeline_monitor(object):
 
 def main():
 	usage = "usage: %prog [options] pipeline" 
-	description = "Contact: search42 <search42zh>"
+	description = "Contact: search42 <search42zh@gmail.com>"
 	parser = OptionParser(usage,version="%prog 1.0.3",description = description)
 	Common_group = OptionGroup(parser,'Common Options')
 	Common_group.add_option('-f',dest='config',help='config file for pipeline',metavar='FILE',type='string',default=None)
@@ -313,7 +313,7 @@ def main():
 	sys.stdout.write("[Pipe] start... %s\n"%time.strftime("%Y-%m-%d %H:%M:%S"))
 	pipeline=pipeline_monitor()
 	pipeline.prase_config(options.config)
-	pipeline.add_opt( [ ('outdir',os.path.abspath(options.outdir) ) ] )                                                        #添加额外参数到self.config
+	pipeline.add_opt( [ ('outdir',os.path.abspath(options.outdir) ),('config',os.path.abspath(options.config) ) ] )                                                        #添加额外参数到self.config
 	sys.stdout.write("[Check_parameter] start... %s\n"%time.strftime("%Y-%m-%d %H:%M:%S") )
 	pipeline.process_pipeline(args[0],mode="check")                                                                            #检查参数
 	pipeline.process_pipeline(args[0])

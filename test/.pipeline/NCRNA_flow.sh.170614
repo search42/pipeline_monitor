@@ -1,0 +1,335 @@
+##################################################################
+##格式化的流程脚本
+##################################################################
+mkdir rawdata  report  result #database
+#workpath=%(outdir)s/rawdata
+ln -s %(Rawdatadir)s/{*,*/*}.gz .
+###workpath=%(outdir)s/result
+##mkdir 0.info/ 1.QC/ 2.mapQC/ 3.merged_asm/ 4.norm/ 5.rnaqc/ 6.lncRNA_predict/ 7.snqc_coding/ 8.seq_anno/ 9.diff_coding/ 10-12.diff_go_kegg_coding 13.snqc_noncoding/ 14.ncRNA_genomic_anno/ 15.diff_noncoding/ 16.diff_ncRNA_func/ 17.diff_ncRNA_enrich/ 18.splicing_events/ 19.variants/ Exprs/
+#workpath=%(outdir)s/result/0.info
+cp %(SampleInfo)s sampleinfo.xls
+
+``` Label=1.QC.fastqc qsub=yet workpath=%(outdir)s/result
+/home/rongzhengqin/bin/fqQC/fastqQC --run-fastqc --seqlen=%(SeqenceLen)s --outdir=1.QC --indir=../rawdata 0.info/sampleinfo.xls
+ls *fastqc.sh | while read i; do mv ${i} run_%(Label)s_${i} ;Doqsub -t 4 -m 2G  run_%(Label)s_${i};done 
+```
+``` Label=1.QC.stats qsub=yet workpath=%(outdir)s/result require_job=1.QC.fastqc
+cd ../rawdata && ls *.zip  | while read i; do unzip $i; done && cd  -
+Doqsub -s run_%(Label)s "/home/rongzhengqin/bin/fqQC/fastqQC --run-stat --seqlen=%(SeqenceLen)s --outdir=1.QC --indir=../rawdata --qual=%(Quality)s 0.info/sampleinfo.xls"
+```
+
+#Label=2.mapQC.index qsub=yes  ncpus=8 mem=16G workpath=%(outdir)s/result
+"echo 1 > /dev/null %s "%("||" if self.config.get("GenomeSTARindex") else "&&") + "mkdir $(dirname %(Genome)s)/STAR_index; STAR --runMode genomeGenerate --genomeDir $(dirname %(Genome)s)/STAR_index --genomeFastaFiles %(Genome)s --sjdbGTFfile %(GTF)s --runThreadN 8"
+
+###awk -f /data/BIN/zhush/bin/tools/gff2gtf-master/gff2gtf.awk GCF_000313855.2_ASM31385v2_genomic.fmt.gff >new.fmt
+###gffread GCF_000167675.1_v2.0_genomic.gff -g GCF_000167675.1_v2.0_genomic.fna -TG -o- | perl -pwe '@t=/transcript_id "([^"]+)/g;@g=/gene_name "([^"]+)/g;s/transcript_id "[^"]+/transcript_id "$t[-1]/;s/gene_id "[^"]+/gene_id "$g[-1]/' >GCF_000167675.1_v2.0_genomic.gtf
+
+``` Label=2.mapQC.map qsub=yet  workpath=%(outdir)s/result require_job=2.mapQC.index
+'/data/BIN/suzhencheng/bin/STAR_script --outQSconversionAdd 0 --num-threads 4 --genomeDir %s'%(self.config.get('GenomeSTARindex') if self.config.get('GenomeSTARindex') else "$(dirname %(Genome)s)/STAR_index" ) + " --readFilesIn ../rawdata/ --sjdbGTFfile %(GTF)s --twopassMode Basic --readFilesCommand zcat --outSAMattrIHstart 0 --outSAMunmapped 'Within KeepPairs' --outSAMtype 'BAM SortedByCoordinate' --strand_specific unstranded genome_star  ./0.info/sampleinfo.xls"
+ls STARaln_*.sh |while read i;do mv ${i} run_%(Label)s_${i} ;Doqsub -t 4 -m 50G  run_%(Label)s_${i};done
+```
+#Label=2.mapQC.result qsub=yes workpath=%(outdir)s/result/2.mapQC require_job=2.mapQC.map
+python /data/BIN/zhangsch/project/RNA/lib/mappingQC.py ../0.info/sampleinfo.xls star ../
+
+``` Label=3.merged_asm.stringtie qsub=yet  workpath=%(outdir)s/result require_job=2.mapQC.map
+grep -v "#" 0.info/sampleinfo.xls | cut -f 1 | while read i ;do echo "stringtie -p 2 -G %(GTF)s -o ${i}/${i}_STR.gtf ${i}/star.sort.bam" > ${i}.cl.sh; done
+ls *.cl.sh | while read i; do mv ${i} run_%(Label)s_${i} ;Doqsub -t 2 run_%(Label)s_${i} ;done
+```
+``` Label=3.merged_asm.merge qsub=yes  workpath=%(outdir)s/result require_job=3.merged_asm.stringtie
+ls ./*/*_STR.gtf >> gtf_samples.txt
+stringtie --merge -G %(GTF)s -o 3.merged_asm/merged.gtf -T 1 -f 0.01 gtf_samples.txt
+ #perl -i.bak -pwe 's/^(chr)?/chr/i if !/^#/' 3.merged_asm/merged.gtf
+```
+``` Label=3.merged_asm.blastrRNA qsub=yet  workpath=%(outdir)s/result/3.merged_asm require_job=3.merged_asm.merge
+python /home/rongzhengqin/pipe/RNAseq/merged_gtf2novel4sT.py  merged.gtf
+gffread ../3.merged_asm/merged.fmt.gtf  -g %(Genome)s -w exons.fa
+Doqsub -t 16 -m 10G -s run_%(Label)s "blastn -query exons.fa -num_threads 16 -db /data/database/rRNA_database/rRNA.5S.SSU.LSU.fmt.fa -outfmt 6 -max_target_seqs 1 -evalue 0.00001 -out blastn.rRNA.result.xls"
+```
+``` Label=3.merged_asm.filter qsub=yes  workpath=%(outdir)s/result/3.merged_asm require_job=3.merged_asm.blastrRNA
+python /home/rongzhengqin/pipe/LNC/filter.py merged.fmt.gtf blastn.rRNA.result.xls > merged.gtf 
+gffread ../3.merged_asm/merged.gtf  -g %(Genome)s  -w exons.fa
+```
+``` Label=18.splicing_events qsub=yes workpath=%(outdir)s/result/18.splicing_events require_job=3.merged_asm.stringtie
+python /home/rongzhengqin/bin/asprofile/asprofile_hdrs.py %(Genome)s genome
+ls ../*/*_STR.gtf | while read i; do ln -s $i ./ ;done 
+ls *_STR.gtf | while read i; do cuffcompare -r %(GTF)s ${i} ;done 
+grep -v "#" ../0.info/sampleinfo.xls  | cut -f 1 | while read i; do /opt/software/ASprofile.b-1.0.4/extract-as ${i}_STR.gtf genome.hdrs -r cuffcmp.${i}_STR.gtf.tmap  %(GTF)s > ${i}.tmap.as ; done
+grep -v "#" ../0.info/sampleinfo.xls  | cut -f 1 | while read i; do perl /opt/software/ASprofile.b-1.0.4/summarize_as.pl ${i}_STR.gtf ${i}.tmap.as -p ${i}_STR.gtf ;done  
+grep -v "#" ../0.info/sampleinfo.xls  | cut -f 1 | while read i; do python /home/rongzhengqin/bin/asprofile/result_fmt.py ${i}_STR.gtf.as.nr cuffcmp.${i}_STR.gtf.tmap > ${i}.splicing.events.stat.xls ;done
+ #ls *.as.nr | while read i; do python /home/rongzhengqin/bin/asprofile/result_fmt.py ${i} None > ${i}.splicing.events.stat.xls ;done
+python /home/rongzhengqin/bin/asprofile/plot4samples.py *.as.nr.splicing.events.stat.xls
+rm *.gtf *.tmap *.refmap cuffcmp.* genome.hdrs *.tmap.as *.as.summary *.as.nr 
+```
+``` Label=4.norm.abundance_ref qsub=yes ncpus=2 mem=4G workpath=%(outdir)s/result require_job=3.merged_asm.filter
+grep ">" 3.merged_asm/exons.fa | sed s'/>//'g | awk '{print $2"\\t"$1}' | sed s'/gene=//'g > gene.transcript.table
+/data/tools/trinityrnaseq-2.2.0/util/align_and_estimate_abundance.pl --transcripts 3.merged_asm/exons.fa --est_method RSEM --aln_method bowtie2 --gene_trans_map gene.transcript.table --prep_reference --output_dir 3.merged_asm/
+```
+``` Label=4.norm.abundance_exp qsub=yet workpath=%(outdir)s/result require_job=4.norm.abundance_ref
+python /home/rongzhengqin/pipe/LNC/s0_aln_estimate.py  0.info/sampleinfo.xls ../rawdata/ 3.merged_asm/exons.fa 1
+ls *.exprs_estimate_aln.sh  | while read i; do mv ${i} run_%(Label)s_${i} ;Doqsub -t 4 run_%(Label)s_${i} ;done
+```
+``` Label=4.norm.filter qsub=yes  workpath=%(outdir)s/result/ require_job=4.norm.abundance_exp
+python /home/rongzhengqin/pipe/LNC/s1_estimate_matrix.py  0.info/sampleinfo.xls  2 && mv Exprs/DAT.matrix.anno Exprs/DAT.matrix.anno.TPM
+python /home/rongzhengqin/pipe/LNC/s1_estimate_matrix.py  0.info/sampleinfo.xls  0 && mv Exprs/DAT.matrix.anno Exprs/DAT.matrix.anno.Count
+mkdir 4.norm
+python /home/rongzhengqin/pipe/RNAseq/filter_matrix.py Exprs/DAT.matrix.anno.TPM  1 2 > 4.norm/screen.isoforms.tpm_table.matrix.anno.xls 
+grep -v "#"  4.norm/screen.isoforms.tpm_table.matrix.anno.xls  | cut -f 2 | python /home/rongzhengqin/scripts/select_tabfile.py - Exprs/DAT.matrix.anno.Count 1 > 4.norm/screen.isoforms.count_table.matrix.anno.xls 
+```
+``` Label=5.rnaqc.stats qsub=yet  workpath=%(outdir)s/result require_job=3.merged_asm.filter 
+ls ./*/star.sort.bam | while read i; do samtools index $i ;done
+ls ./*/star.sort.bam | while read i ; do Doqsub -s run_%(Label)s -t 1 "python /home/rongzhengqin/bin/MappingQC/RNAseq-RNAqc.py ./3.merged_asm/merged.gtf ${i}" ;done
+```
+#Label=5.rnaqc.plot qsub=yes workpath=%(outdir)s/result/5.rnaqc require_job=5.rnaqc.stats
+python /home/rongzhengqin/bin/MappingQC/RNAseq-RNAqc_plot.py ../0.info/sampleinfo.xls ../ /star.sort.bam.baohe_cover.dat.npz
+
+``` Label=6.lncRNA_predict qsub=yes  workpath=%(outdir)s/result/6.lncRNA_predict require_job=3.merged_asm.merge,4.norm.abundance
+awk '!/^\\s*$/' %(GTF)s |sort -t $'\\t' -k1,1 -k4,4n -k5,5n  - > sorted.ref.gtf   #perl -pwe 's/^(chr)?/chr/i if !/^#/'
+python /home/rongzhengqin/bin/fmt_2gtf.py  sorted.ref.gtf ../3.merged_asm/merged.gtf
+cut -f 2 ../4.norm/screen.isoforms.tpm_table.matrix.anno.xls | python /home/rongzhengqin/scripts/select_tabfile.py - stringtie.info.xls  5 > tmp ; mv tmp stringtie.info.xls
+python /home/rongzhengqin/pipe/RNAseq/lnc_mRNA_2predict.py stringtie.info.xls %(Genome)s
+  # if all, will use 4 cpu cores,  for 1 model, use 1 cpu core
+python /home/rongzhengqin/bin/lnc4cpat.py unknown.fa %(LncRNA_PredictDB)s  ## or Fly  Mouse Zebrafish  or all
+grep noncoding coding_predict.result.xls | cut -f 1 | python /home/rongzhengqin/scripts/select_fa.py - unknown.fa > predict.noncoding.fa
+grep -P "\\tcoding" coding_predict.result.xls | cut -f 1 | python /home/rongzhengqin/scripts/select_fa.py - unknown.fa > predict.coding.fa
+rm unknown.fa *.out *.out.dat *.out.r
+
+mkdir scan_miR ; cd scan_miR
+python /home/rongzhengqin/pipe/miRseq/scan_predict.py ../predict.noncoding.fa animal 1 300  #  if plant use plant
+perl /data/BIN/zhangsch/project/RNA/scripts/moniter_qsub.pl sh Scan_microRNAs.sh
+cd ..
+python /home/rongzhengqin/pipe/miRseq/scan_predict_result_parse.py scan_miR/*/*.out  && rm -rf scan_miR
+python /home/rongzhengqin/pipe/RNAseq/lnc_stat_stringtie_predict.py stringtie.info.xls coding_predict.result.xls miRpare_predict_result.xls
+python /data/BIN/zhangsch/project/RNA/lib/gene_exon_stat.py coding,know_nc,novel_coding,novel_nc ref_novel_predicted.info.xls coding.fa lnc.fa predict.coding.fa predict.noncoding.fa
+```
+
+``` Label=8.seq_anno.TransDecoder.1 qsub=yet  workpath=%(outdir)s/result/8.seq_anno require_job=6.lncRNA_predict
+gffread %(GTF)s -x known.cds.fa  -g %(Genome)s
+ls ../6.lncRNA_predict/*.fa | while read i; do ln -s ${i} ./ ;done 
+Doqsub -t 2 -s run_%(Label)s_known.cds "/data/tools/trinityrnaseq-2.2.0/TransDecoder-3.0.0/TransDecoder.LongOrfs -t known.cds.fa -S ;\
+/data/tools/trinityrnaseq-2.2.0/TransDecoder-3.0.0/TransDecoder.Predict -t known.cds.fa  --single_best_orf"
+```
+
+``` Label=8.seq_anno.TransDecoder.2 qsub=yet  workpath=%(outdir)s/result/8.seq_anno require_job=8.seq_anno.TransDecoder.1
+Doqsub -t 2 -s run_%(Label)s_predict.coding "/data/tools/trinityrnaseq-2.2.0/TransDecoder-3.0.0/TransDecoder.LongOrfs -t predict.coding.fa -S ; \
+/data/tools/trinityrnaseq-2.2.0/TransDecoder-3.0.0/TransDecoder.Predict -t predict.coding.fa --train known.cds.fa.transdecoder.cds --single_best_orf"
+
+Doqsub -t 2 -s run_%(Label)s_coding "/data/tools/trinityrnaseq-2.2.0/TransDecoder-3.0.0/TransDecoder.LongOrfs -t coding.fa -S ; \
+/data/tools/trinityrnaseq-2.2.0/TransDecoder-3.0.0/TransDecoder.Predict -t coding.fa --train known.cds.fa.transdecoder.cds --single_best_orf"
+
+Doqsub -t 2 -s run_%(Label)s_imm "/data/tools/trinityrnaseq-2.2.0/TransDecoder-3.0.0/TransDecoder.LongOrfs -t imm.fa -S ; \
+/data/tools/trinityrnaseq-2.2.0/TransDecoder-3.0.0/TransDecoder.Predict -t imm.fa --train known.cds.fa.transdecoder.cds --single_best_orf "
+
+Doqsub -t 2 -s run_%(Label)s_pseudo "/data/tools/trinityrnaseq-2.2.0/TransDecoder-3.0.0/TransDecoder.LongOrfs -t pseudo.fa -S ; \
+/data/tools/trinityrnaseq-2.2.0/TransDecoder-3.0.0/TransDecoder.Predict -t pseudo.fa --train known.cds.fa.transdecoder.cds --single_best_orf"
+```
+
+``` Label=8.seq_anno.blast qsub=yet  workpath=%(outdir)s/result/8.seq_anno require_job=6.lncRNA_predict,8.seq_anno.TransDecoder.1,8.seq_anno.TransDecoder.2
+cat predict.coding.fa.transdecoder.pep known.cds.fa.transdecoder.pep > known.novel.transdecoder.pep
+rm known.cds.fa.transdecoder.pep && ls *.pep | while read i; do python /data/BIN/suzhencheng/bin/extract_transdecoder_revise.py ${i};done
+awk '{print $1"\t"$5"\t"$6"\t"$7"\t"$8}' predict.coding.fa.transdecoder.pep.info.txt > predict.coding.pep.orf.xls
+
+python /home/rongzhengqin/pipe/RNAseq/orf_types_plot.py predict.coding.pep.orf.xls
+rm -rf *.bed *.cds *.pep *.gff3 *.mRNA *.info.txt transdecoder.tmp*
+python /data/BIN/zhangsch/project/RNA/lib/gene_exon_stat.py coding,know_nc,novel_coding,novel_nc ../6.lncRNA_predict/ref_novel_predicted.info.xls coding.fa lnc.fa predict.coding.fa predict.noncoding.fa
+ #(根据物种信息选择,参见/data/database/nr/README.txt)
+Doqsub -t 16 -s run_%(Label)s_novelnr "mkdir NR; blastp -num_threads 16 -query predict.coding.fa.transdecoder.pep.sel.fa -db %(BlastNR_DB)s -outfmt '6 qseqid sseqid pident length mismatch gapopen qstart qend sstart send evalue stitle' -max_target_seqs 1 -evalue 0.00001 -out NR/blastp.predict.coding.result.xls"
+Doqsub -t 16 -s run_%(Label)s_novelegg "mkdir eggnog; blastp -query predict.coding.fa.transdecoder.pep.sel.fa -num_threads 16 -db /data/database/eggNOG/current/knowneggnog -outfmt 6 -max_target_seqs 5 -evalue  0.00001 -out eggnog/eggnog.result.xls"
+Doqsub -t 16 -s run_%(Label)s_novelsp "mkdir NR 2>&1 >/dev/null; blastp -num_threads 16 -query predict.coding.fa.transdecoder.pep.sel.fa -db /data/database/ftp.ncbi.nlm.nih.gov/2015-07-14/blast/swissprot -outfmt 6 -max_target_seqs 1 -evalue 0.00001 -out NR/blastp.sp.predict.coding.result.xls"
+cat *.pep.sel.fa > known.novel.pep.fa 
+python /home/lizhenzhong/bin/LNC/filter_dup_fasta.py known.novel.pep.fa && mv known.novel.pep.filter.fa known.novel.pep.fa
+mkdir temp_anno;cd temp_anno
+perl /data/BIN/zhangsch/project/RNA/scripts/split_fasta_by_order.pl ../known.novel.pep.fa 10 leaf
+ #Doqsub -t 16 -s run_%(Label)s_go "/data/tools/interproscan-5.15-54.0/interproscan.sh -appl PfamA,TIGRFAM,SMART,SuperFamily,PRINTS -dp -f tsv,html --goterms  --iprlookup -t p -i known.novel.pep.fa"
+for i in leaf.? ; do Doqsub -t 16 -s run_%(Label)s_go "/data/tools/interproscan-5.15-54.0/interproscan.sh -appl PfamA,TIGRFAM,SMART,SuperFamily,PRINTS -dp -f tsv,html --goterms  --iprlookup -t p -i ${i}" ;done
+ #(根据物种信息选择)
+ #Doqsub -t 16 -s run_%(Label)s_kegg "mkdir kegg; blastp -query known.novel.pep.fa -num_threads 23 -db %(BlastKO_DB)s  -outfmt 6  -max_target_seqs 1 -evalue 0.00001 -out kegg/blast.ko.xls"
+for i in leaf.? ; do Doqsub -t 16 -s run_%(Label)s_kegg "blastp -query ${i} -num_threads 23 -db %(BlastKO_DB)s  -outfmt 6  -max_target_seqs 1 -evalue 0.00001 -out blast.ko.${i}.xls" ;done
+```
+``` Label=8.seq_anno.summary qsub=yes  workpath=%(outdir)s/result/8.seq_anno require_job=8.seq_anno.blast
+ #mkdir ipr; mv known.novel.pep.fa.html.tar.gz known.novel.pep.fa.tsv ipr/
+ #mkdir Detail_anno && mv known.novel.pep.fa.html.tar.gz Detail_anno && cd Detail_anno && tar zxvf known.novel.pep.fa.html.tar.gz && cd ..
+mkdir -p ipr/Detail_anno; 
+cat temp_anno/leaf.*tsv >ipr/known.novel.pep.fa.tsv
+perl -i.bak -pwe 's/^(\S+)_\d+\t/$1\t/' ipr/known.novel.pep.fa.tsv
+cd ipr/Detail_anno; for i in ../../temp_anno/*html.tar.gz;do  tar -xzf ${i};done;cd ../..
+mkdir kegg;cat temp_anno/blast.ko.leaf*xls >kegg/blast.ko.xls
+ # summary 
+cd eggnog ; python /home/rongzhengqin/bin/AnnoDB/blast2eggNOG.py eggnog.result.xls /data/database/eggNOG/v4/eggNOG.info.db ; rm eggnog.result.xls ; cd ..
+cd NR ; python /home/rongzhengqin/bin/AnnoDB/DBanno_stat.py  blastp.predict.coding.result.xls blastp.sp.predict.coding.result.xls /data/project/blankfile NR,Swissprot,None ../predict.coding.fa ; rm -rf DBanno_stat_venn_venn* ; cd ..
+cd kegg ; python /home/zhush/scripts/getKO.py /data/database/KEGG/Current/KO.id.list blast.ko.xls /data/database/KEGG/Current/ko_pathway_name_class.list /data/database/KEGG/Current/ko_db.info ; rm blast.ko.xls ; cd ..
+cd ipr ; python /home/rongzhengqin/bin/AnnoGoKegg/ipr_go_fmt_v2.py known.novel.pep.fa.tsv /data/database/GO/Current/obo_topology.txt /data/database/GO/Current/GO_alt_id.alt_id > known.novel.pep.fa.tsv.topo.xls
+
+python /home/rongzhengqin/pipe/LNC/iprscananno2html.py known.novel.pep.fa.tsv ; cd ..
+python /data/BIN/chenghh/bin/pipe/DB_anno_total_combine.py NR,eggNOG,kegg,ipr NR/DBanno_detail.xls,eggnog/gene2eggNOG.annotation.xls,kegg/blast.ko.xls.KO.xls,ipr/known.novel.pep.fa.tsv.topo.xls
+```
+``` Label=snqc qsub=yes  workpath=%(outdir)s/result/4.norm require_job=6.lncRNA_predict
+python /home/rongzhengqin/pipe/RNAseq/split_matrix_anno2non_c.py  ../6.lncRNA_predict/ref_novel_predicted.info.xls screen.isoforms.count_table.matrix.anno.xls
+python /home/rongzhengqin/pipe/RNAseq/split_matrix_anno2non_c.py  ../6.lncRNA_predict/ref_novel_predicted.info.xls screen.isoforms.tpm_table.matrix.anno.xls
+```
+``` Label=7.snqc_coding qsub=yes  workpath=%(outdir)s/result/7.snqc_coding require_job=snqc
+python /home/rongzhengqin/bin/exprs_QC/exprs_qc.py ../0.info/sampleinfo.xls ../4.norm/screen.isoforms.tpm_table.matrix.anno.coding.xls 1
+python /home/rongzhengqin/bin/stat_exprs_insamples.py ../0.info/sampleinfo.xls ../4.norm/screen.isoforms.tpm_table.matrix.anno.coding.xls  $(grep -v '#' ../0.info/sampleinfo.xls |wc -l)  ## 12 为样本数目(使用实际的样本数目)
+```
+``` Label=13.snqc_noncoding qsub=yes  workpath=%(outdir)s/result/13.snqc_noncoding require_job=snqc
+python /home/rongzhengqin/bin/exprs_QC/exprs_qc.py ../0.info/sampleinfo.xls ../4.norm/screen.isoforms.tpm_table.matrix.anno.noncoding.xls 1
+python /home/rongzhengqin/bin/stat_exprs_insamples.py ../0.info/sampleinfo.xls ../4.norm/screen.isoforms.tpm_table.matrix.anno.noncoding.xls $(grep -v '#' ../0.info/sampleinfo.xls |wc -l)  ## 12 为样本数目
+```
+
+``` Label=9.diff_coding qsub=yes  workpath=%(outdir)s/result/9.diff_coding require_job=snqc
+awk -F"\\t" '{print $1"|"$2"\\t"$0}' ../4.norm/screen.isoforms.count_table.matrix.anno.coding.xls |  cut -f 1,4-100 > readcounts.xls
+grep -v "#" ../0.info/sampleinfo.xls | awk  '{print $5"\\t"$1}'  > samples.list
+/data/tools/trinityrnaseq-2.2.0/Analysis/DifferentialExpression/run_DE_analysis.pl --matrix readcounts.xls --method edgeR --samples_file samples.list  --contrasts %(ContrastFile)s --output edgeR.diff.dir --dispersion 0.16
+ls edgeR.diff.dir/readcounts.xls.*.edgeR.DE_results | while read i; do python /data/BIN/zhangsch/project/RNA/lib/s2_fmt_DEresult.py ${i} 1; done ## to check logFC\A3\A8A/B\A3\A9\A3\AC\C8\F4\D0\E8ҪlogFC(B/A)\A3\AC\D4\F2-1
+ 
+ #awk -F"\\t" '{print $1"_vs_"$2}'  %(ContrastFile)s | while read i; do awk '$4<0.05' edgeR.diff.dir/readcounts.xls.${i}.edgeR.DE_results.Diff.total.xls >edgeR.diff.dir/readcounts.xls.${i}.edgeR.DE_results.Diff.sig.xls;done
+
+awk -F"\\t" '{print $1"_vs_"$2}'  %(ContrastFile)s  | while read i; do mkdir $i ;done
+awk -F"\\t" '{print $1"_vs_"$2}'  %(ContrastFile)s  | while read i; do cp edgeR.diff.dir/readcounts.xls.${i}.edgeR.DE_results.Diff.sig.xls ${i}/Diff.sig.xls ;done
+awk -F"\\t" '{print $1"_vs_"$2}'  %(ContrastFile)s  | while read i; do cp edgeR.diff.dir/readcounts.xls.${i}.edgeR.DE_results.Diff.total.xls ${i}/Diff.total.xls ;done
+awk -F"\\t" '{print $1"_vs_"$2}'  %(ContrastFile)s  | while read i; do cp edgeR.diff.dir/readcounts.xls.${i}.edgeR.DE_results.MA_n_Volcano.pdf ${i}/MA_n_Volcano.pdf ;done
+
+cat  ../9.diff_coding/*/Diff.sig.xls | grep -v "^#" |  cut -f 2 | sort |  uniq | python /home/rongzhengqin/scripts/select_fa.py - ../3.merged_asm/exons.fa > diffexprs.transcripts_coding.fa
+```
+
+``` Label=10-12.diff_go_kegg_coding qsub=yes workpath=%(outdir)s/result/10-12.diff_go_kegg_coding require_job=8.seq_anno.summary,9.diff_coding
+ln -s ../8.seq_anno/ipr/known.novel.pep.fa.tsv.topo.xls ./
+ln -s ../8.seq_anno/kegg/blast.ko.xls.KO.xls ./
+    # --taxid=4530
+awk -F"\\t" '{print $1"_vs_"$2}'  %(ContrastFile)s  | while read i; do mkdir $i ;done
+awk -F"\\t" '{print $1"_vs_"$2}'  %(ContrastFile)s  | while read i; do cd ${i} ; python /data/BIN/lihuamei/bin/go_Annotation.py --nohuman --gene2ipr=../known.novel.pep.fa.tsv.topo.xls --genesigxls=../../9.diff_coding/${i}/Diff.sig.xls --bg=../../9.diff_coding/${i}/Diff.total.xls --sampleinfo=../../0.info/sampleinfo.xls --annodata=../../4.norm/screen.isoforms.tpm_table.matrix.anno.coding.xls --maxnum=30 ; cd .. ; done
+awk -F"\\t" '{print $1"_vs_"$2}'  %(ContrastFile)s  | while read i; do cd ${i} ; python /data/BIN/lihuamei/bin/kegg_ipr_Anotation.py --nohuman --gene2ipr=../known.novel.pep.fa.tsv.topo.xls  --ko=../blast.ko.xls.KO.xls --genesigxls=../../9.diff_coding/${i}/Diff.sig.xls --bg=../../9.diff_coding/${i}/Diff.total.xls --sampleinfo=../../0.info/sampleinfo.xls --annodata=../../4.norm/screen.isoforms.tpm_table.matrix.anno.coding.xls ; cd .. ; done
+awk -F"\\t" '{print $1"_vs_"$2}'  %(ContrastFile)s  | while read i; do cd ${i} ; python /data/BIN/lihuamei/bin/anno_results_fmt.py --run-stat --sig_go=./go_annotation/Diff_exprs.GO_enrich.lst --sig_kegg=./kegg_annotation/Diff_exprs.KEGG_enrich.lst --sig_ipr=./IPR_annotation/Diff_exprs.IPR_enrich.lst ; cd .. ; done
+ #awk -F"\\t" '{print $1"_vs_"$2}'  %(ContrastFile)s  | while read i; do cd ${i} ; python /data/BIN/chenghh/bin/pipe/sig_anno_nr.py ../../../8.seq_anno/NR/DBanno_detail.xls Diff_exprs.sig.anno.xls ; done
+```
+
+``` Label=14.ncRNA_genomic_anno qsub=yes workpath=%(outdir)s/result/14.ncRNA_genomic_anno require_job=6.lncRNA_predict
+python /home/rongzhengqin/pipe/RNAseq/lnc_anno.py ../6.lncRNA_predict/ref_novel_predicted.info.xls ../6.lncRNA_predict/refGTF.info.xls.gz
+python /home/rongzhengqin/pipe/RNAseq/lnc_anno_summary.py lnc_gene_interact.resulut.xls ../4.norm/screen.isoforms.tpm_table.matrix.anno.noncoding.xls > intergenic.genes.list
+cat intergenic.genes.list | python /home/rongzhengqin/scripts/select_tabfile.py - ../6.lncRNA_predict/ref_novel_predicted.info.xls 5 > intergenic.ncRNA.info.xls
+```
+
+``` Label=15.diff_noncoding qsub=yes workpath=%(outdir)s/result/15.diff_noncoding require_job=4.norm,snqc,9.diff_coding
+awk -F"\\t" '{print $1"|"$2"\\t"$0}' ../4.norm/screen.isoforms.count_table.matrix.anno.noncoding.xls |  cut -f 1,4-100 > readcounts.xls
+/data/tools/trinityrnaseq-2.2.0/Analysis/DifferentialExpression/run_DE_analysis.pl --matrix readcounts.xls --method edgeR --samples_file ../9.diff_coding/samples.list  --contrasts %(ContrastFile)s --output edgeR.diff.dir --dispersion 0.16
+ #对无生物学重复差异分析
+ #/data/tools/trinityrnaseq-2.2.0/Analysis/DifferentialExpression/run_DE_analysis.pl --matrix readcounts.xls --method edgeR --samples_file ../9.diff_coding/samples.list  --contrasts %(ContrastFile)s --output edgeR.diff.dir --dispersion 0.16
+ls edgeR.diff.dir/readcounts.xls.*.edgeR.DE_results | while read i; do python /data/BIN/zhangsch/project/RNA/lib/s2_fmt_DEresult.py $i 1; done
+
+ #awk -F"\\t" '{print $1"_vs_"$2}'  %(ContrastFile)s | while read i; do awk '$4<0.05' edgeR.diff.dir/readcounts.xls.${i}.edgeR.DE_results.Diff.total.xls >edgeR.diff.dir/readcounts.xls.${i}.edgeR.DE_results.Diff.sig.xls;done
+
+awk -F"\\t" '{print $1"_vs_"$2}'  %(ContrastFile)s  | while read i; do mkdir $i ;done
+awk -F"\\t" '{print $1"_vs_"$2}'  %(ContrastFile)s | while read i; do cp edgeR.diff.dir/readcounts.xls.${i}.edgeR.DE_results.Diff.sig.xls ${i}/Diff.sig.xls ;done 
+awk -F"\\t" '{print $1"_vs_"$2}'  %(ContrastFile)s | while read i; do cp edgeR.diff.dir/readcounts.xls.${i}.edgeR.DE_results.Diff.total.xls ${i}/Diff.total.xls ;done
+awk -F"\\t" '{print $1"_vs_"$2}'  %(ContrastFile)s | while read i; do cp edgeR.diff.dir/readcounts.xls.${i}.edgeR.DE_results.MA_n_Volcano.pdf ${i}/MA_n_Volcano.pdf ;done
+
+cat  */Diff.sig.xls | grep -v "^#" |  cut -f 2 | sort |  uniq | python /home/rongzhengqin/scripts/select_fa.py - ../3.merged_asm/exons.fa >diffexprs.transcripts_noncoding.fa
+```
+
+``` Label=16.diff_ncRNA_func qsub=yes workpath=%(outdir)s/result/16.diff_ncRNA_func require_job=15.diff_noncoding,14.ncRNA_genomic_anno,9.diff_coding
+ #========1 position related ncRNA
+cat  ../15.diff_noncoding/*_vs_*/Diff.sig.xls | grep -v "#" | cut -f 2 | python /home/rongzhengqin/scripts/select_tabfile.py - ../14.ncRNA_genomic_anno/lnc_gene_interact.resulut.xls 1 > pos_related_diffexprs_nc.interact.info.xls
+ #========2 get diff exprs intergenic ncRNA result
+cat  ../15.diff_noncoding/*_vs_*/Diff.sig.xls | grep -v "#"  | cut -f 2  | python /home/rongzhengqin/scripts/select_tabfile.py - ../14.ncRNA_genomic_anno/intergenic.ncRNA.info.xls 5 > intergenic_diffexprs_ncRNA.info.xls
+
+ #========3 计算位置相关的ncRNA 和 mRNA 间的表达相关性
+python /home/rongzhengqin/pipe/RNAseq/co_exprs/filter_interaction_lnc_mRNA_coexprs.py ../4.norm/screen.isoforms.tpm_table.matrix.anno.noncoding.xls ../4.norm/screen.isoforms.tpm_table.matrix.anno.coding.xls noncoding,coding  pos_related_diffexprs_nc.interact.info.xls 1_6 -1  > coexprs_pos_related_diffexprs_nc.interact.result.xls
+
+ #========4 计算 intergenic ncRNA 和 其他 mRNA 间的表达关系
+grep -v "^#" intergenic_diffexprs_ncRNA.info.xls | cut -f 6 | sort | uniq > diffexprsNC.list
+cat diffexprsNC.list | python /home/rongzhengqin/scripts/select_tabfile.py - ../4.norm/screen.isoforms.tpm_table.matrix.anno.noncoding.xls 1 > diffexprsNC.exprs.matrix.list
+grep -v "#" ../4.norm/screen.isoforms.tpm_table.matrix.anno.coding.xls | cut -f 2  >  coding.list
+python /home/rongzhengqin/pipe/RNAseq/co_exprs/ncRNAvsmRNA_list.py diffexprsNC.list coding.list intergenic > intergenicNC_C.interact.list
+python /home/rongzhengqin/pipe/RNAseq/co_exprs/filter_interaction_lnc_mRNA_coexprs.py ../4.norm/screen.isoforms.tpm_table.matrix.anno.noncoding.xls ../4.norm/screen.isoforms.tpm_table.matrix.anno.coding.xls noncoding,coding intergenicNC_C.interact.list 0_1 2 > coexprs_diffexprs_intergenic_nc.interact.resulut.list
+python /home/rongzhengqin/pipe/RNAseq/co_exprs/screenPvalue.py coexprs_diffexprs_intergenic_nc.interact.resulut.list 0.00001 > coexprs_diffexprs_intergenic_nc.interact.0.00001.xls 
+
+mkdir plot ; cd plot
+python /home/rongzhengqin/bin/plot_gene/plot_lncVSgene.py ../coexprs_pos_related_diffexprs_nc.interact.result.xls ../../4.norm/screen.isoforms.tpm_table.matrix.anno.xls ../../0.info/sampleinfo.xls
+python /home/rongzhengqin/bin/plot_gene/get_to_plot.py ../coexprs_pos_related_diffexprs_nc.interact.result.xls ../../6.lncRNA_predict/ref_novel_predicted.info.xls > tmp.xls
+python /home/rongzhengqin/bin/plot_gene/plot_lncStruct.py ../coexprs_pos_related_diffexprs_nc.interact.result.xls tmp.xls > run.sh
+sh  run.sh
+cd ..
+
+grep -v "#" coexprs_pos_related_diffexprs_nc.interact.result.xls | cut -f 2,7 > interact.list
+grep -v "#" coexprs_diffexprs_intergenic_nc.interact.0.00001.xls | cut -f 1,2 >> interact.list
+ #cd ..
+
+ #lncRNA和MRNA共表达的散点图
+awk -F"\\t" '{print $1"_vs_"$2}'  %(ContrastFile)s  | while read i; do mkdir $i ;done
+awk -F"\\t" '{print $1"_vs_"$2}'  %(ContrastFile)s  | while read i;do cd ${i} ; cat ../../15.diff_noncoding/$i/Diff.total.xls ../../9.diff_coding/$i/Diff.total.xls > total.diffgene.xls ; cd ..; done
+grep -v "#" coexprs_pos_related_diffexprs_nc.interact.result.xls|cut -f 2,7|sort -u > coexprs.list
+awk -F"\\t" '{print $1"_vs_"$2}'  %(ContrastFile)s  | while read i;do cd  ${i} ;  python /data/BIN/donglh/bin/coexprs-plot.py total.diffgene.xls ../coexprs.list ; done
+ #如果报错说xy轴数目不同，则表明有一部分的lncRNA的转录本或者mRNA的转录本是在total中不显著（尤其是多个样本），所以需要对样本进行过滤后再构图
+awk -F"\\t" '{print $1"_vs_"$2}'  %(ContrastFile)s  | while read i; do cd ${i} ; python /data/BIN/donglh/bin/matplot/coexprs/select-mRNAco.py total.diffgene.xls ../coexprs.list > mRNA-coexpr.xls ; cd .. ; done
+awk -F"\\t" '{print $1"_vs_"$2}'  %(ContrastFile)s  | while read i; do cd ${i} ; python /data/BIN/donglh/bin/matplot/coexprs/select-lncRNAco.py total.diffgene.xls ../coexprs.list > lncRNA-coexpr.xls ; cd .. ; done
+awk -F"\\t" '{print $1"_vs_"$2}'  %(ContrastFile)s  | while read i; do cd ${i} ; python /data/BIN/donglh/bin/matplot/coexprs/select-mRNA-lncRNA.py mRNA-coexpr.xls lncRNA-coexpr.xls > new-coexprs.list ; cd .. ; done
+awk -F"\\t" '{print $1"_vs_"$2}'  %(ContrastFile)s  | while read i;do cd ${i} ;  python /data/BIN/donglh/bin/matplot/coexprs/coexprs-plot.py total.diffgene.xls new-coexprs.list ; cd .. ; done
+```
+
+``` Label=17.diff_ncRNA_enrich qsub=yes workpath=%(outdir)s/result/17.diff_ncRNA_enrich require_job=8.seq_anno.summary,9.diff_coding,15.diff_noncoding,16.diff_ncRNA_func
+awk -F"\\t" '{print $1"_vs_"$2}'  %(ContrastFile)s  | while read i; do mkdir $i ;done
+awk -F"\\t" '{print $1"_vs_"$2}'  %(ContrastFile)s  | while read i; do python /home/rongzhengqin/pipe/RNAseq/get_lncRNAtarget_sigfile.py ../16.diff_ncRNA_func/interact.list ../15.diff_noncoding/${i}/Diff.sig.xls > ${i}/Diff.sig.xls ;done 
+awk -F"\\t" '{print $1"_vs_"$2}'  %(ContrastFile)s  | while read i; do cd ${i} ; python /data/BIN/lihuamei/bin/go_Annotation.py --nohuman --gene2ipr=../../8.seq_anno/ipr/known.novel.pep.fa.tsv.topo.xls  --genesigxls=../../17.diff_ncRNA_enrich/${i}/Diff.sig.xls --bg=../../9.diff_coding/${i}/Diff.total.xls --sampleinfo=../../0.info/sampleinfo.xls --annodata=../../4.norm/screen.isoforms.tpm_table.matrix.anno.coding.xls --maxnum=30 ; cd .. ; done
+awk -F"\\t" '{print $1"_vs_"$2}'  %(ContrastFile)s  | while read i; do cd ${i} ; python /data/BIN/lihuamei/bin/kegg_ipr_Anotation.py --nohuman --gene2ipr=../../8.seq_anno/ipr/known.novel.pep.fa.tsv.topo.xls --ko=../../8.seq_anno/kegg/blast.ko.xls.KO.xls --genesigxls=../../17.diff_ncRNA_enrich/${i}/Diff.sig.xls --bg=../../9.diff_coding/${i}/Diff.total.xls --sampleinfo=../../0.info/sampleinfo.xls --annodata=../../4.norm/screen.isoforms.tpm_table.matrix.anno.coding.xls ; cd .. ; done 
+awk -F"\\t" '{print $1"_vs_"$2}'  /data/project/NCRNA/HN16020344/prepare/contrast.list  | while read i; do cd ${i} ; python /data/BIN/lihuamei/bin/anno_results_fmt.py --run-stat --sig_go=./go_annotation/Diff_exprs.GO_enrich.lst --sig_kegg=./kegg_annotation/Diff_exprs.KEGG_enrich.lst --sig_ipr=./IPR_annotation/Diff_exprs.IPR_enrich.lst ; cd .. ; done
+```
+
+``` Label=19.variants.call_total qsub=yet workpath=%(outdir)s/result/ require_job=2.mapQC.map
+python /home/rongzhengqin/bin/variant_call/make_calling_sh.py 0.info/sampleinfo.xls /star.sort.bam %(Genome)s > run_%(Label)s_total.variant.sh
+Doqsub -t 1 -m 40G run_%(Label)s_total.variant.sh
+```
+
+``` Label=19.variants.call_sample qsub=yet workpath=%(outdir)s/result/19.variants require_job=2.mapQC.map
+grep -v "#" ../0.info/sampleinfo.xls  | cut -f  1 | while read i; do echo "/opt/software/bin/samtools mpileup -Q13 -q20 -f %(Genome)s ../${i}/star.sort.bam -uD | bcftools view -vcg -p 0.99 - > ${i}.snp.vcf" > run_%(Label)s_${i}.samtools.snp.sh;done
+ls *.samtools.snp.sh | while read i; do Doqsub  $i; done
+```
+
+``` Label=19.variants.annotation qsub=yes workpath=%(outdir)s/result/19.variants require_job=19.variants.call_sample,19.variants.call_total
+ls *.vcf  | while read i ; do python /home/rongzhengqin/bin/variant_call/vcf2annovar.py $i ;done
+python /home/rongzhengqin/bin/variant_call/vcf2annovar.py ../total.snp.vcf 
+awk -F"\\t" '{if($11>20) print $0 }' ../total.snp.vcf.fmt | sort -t $'\\t' -k1,1 -k2,2n -k3,3n > ../qual20_total.snp.fmt
+python /home/rongzhengqin/bin/variant_call/mergepop.py  ../qual20_total.snp.fmt ../0.info/sampleinfo.xls 0 ./  ./
+
+python  /home/rongzhengqin/bin/variant_call/gtf_gff_varanno.py  %(GTFtype)s %(GTF)s %(Genome)s > build.sh  #(若使用gff3 格式的注释文件，则采用gtf->gff   注释文件改为Homo_sapiens.GRCh38.77.filter.gff3)
+sh build.sh
+ #/opt/software/annovar/table_annovar.pl total.snp.fmt test/ -buildver test -protocol  ensGene -operation g
+
+ls *.snp.fmt | while read i; do /opt/software/annovar/table_annovar.pl $i test/ -buildver test -protocol  ensGene -operation g  ; done
+ls *.indel.fmt | while read i; do /opt/software/annovar/table_annovar.pl $i test/ -buildver test -protocol  ensGene -operation g  ; done
+
+ # ls *.ensGene.variant_function   | while read i; do sed s/ncRNA/RNA/g $i tmp && mv tmp $i  ; done  (#若 gtf 使用的是merged gtf)
+
+python /home/rongzhengqin/bin/variant_call/mut_sub_pattern.py *.snp.fmt
+
+python /home/rongzhengqin/bin/variant_call/varanno.stat.py  *.snp.fmt ensGene > SNP.anno.stat.xls 
+python /home/rongzhengqin/bin/variant_call/plot_varanno.stat.py SNP.anno.stat.xls 
+ls Annotation_Type_stat.* | while read i; do mv ${i} SNP_${i} ;done 
+
+python /home/rongzhengqin/bin/variant_call/varanno.stat.py  *.indel.fmt ensGene > INDEL.anno.stat.xls
+python /home/rongzhengqin/bin/variant_call/plot_varanno.stat.py INDEL.anno.stat.xls
+ls Annotation_Type_stat.* | while read i; do mv ${i} InDel_${i} ;done
+
+ls total.*.fmt  | while read i; do mv ${i} ${i}.xls ;done
+ls total.*.test_multianno.txt |  while read i; do mv ${i} ${i}.xls ;done
+rm -rf  *.log *.exonic_variant_function *.variant_function ref* test *.vcf *.fmt *.txt *.invalid_input 
+```
+
+``` Label=report qsub=yes workpath=%(outdir)s/report/ require_job=All
+ls %(outdir)s/result | grep -P '^[0-9]+' | while read i; do cp -R %(outdir)s/result/$i ./ ; done 
+cp ../result/*.html ./
+
+ #然后 拷贝配置文件：
+cp -R /data/project/NCRNA//HELP ./
+cp -R /data/project/NCRNA//CSS ./
+cp -R /data/project/NCRNA//dist/ ./
+
+ # 删除一些中间文件
+rm 4.norm/*_table ./*/*/*/*.lst */*.list ./{*/,./}*.sh ./{*/,./}*.sh.e* ./{*/,./}*.sh.o* 
+rm 3.merged_asm/{exons.fa.*,merged.fmt.gtf,blastn.rRNA.result.xls}
+rm 6.lncRNA_predict/{*tmp*,class_code_stat.*,stringtie.info.xls,sorted.ref.gtf,ref_novel_predicted.info.xls.*,/refGTF.info.xls.gz*}
+rm -r 8.seq_anno/{*transdecoder_dir,temp_anno,*pep.sel.fa,ipr/known.novel.pep.fa.tsv{,.bak}}
+rm -r {9.diff_coding,15.diff_noncoding}/{edgeR.diff.dir,readcounts.xls}
+rm 10-12.diff_go_kegg_coding/*
+python /data/BIN/zhangsch/project/RNA/scripts/genome_guild_ncRNA_v5.py %(SampleInfo)s %(ContrastFile)s
+
+ #py /home/lizhenzhong/bin/ftp_client/ftp_client.py -I HN16025000.report.tar.gz --project HN16025000 --manager xuzhenhua
+```

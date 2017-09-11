@@ -4,12 +4,12 @@
 #Label=a.1 qsub=yes [yes,no,yet] ncpus=1 mem=2G workpath=%(outdir)s/1.1 #host=               #通过行首#对下行命令的运行参数进行定制,qusb到集群
 echo command1.1 %(c1)s %(c6)s && sleep 10
 #Label=a.2 qsub=yet      [yet] ncpus=1 mem=2G workpath=%(outdir)s/1.2 #host=                 #以commands调用,并获取job id
-doqsub "echo command1.2 %(c1)s && sleep 20"
+Doqsub "echo command1.2 %(c1)s && sleep 20"
      #
 
 ``` Label=a.3 qsub=yet      [yet] ncpus=1 mem=2G workpath=%(outdir)s/1.3 #host=              #支持多任务投递
 for i in {1..5};do echo echo command1.3.${i} %(c1)s >test1.3.${i}.sh;done
-ls test1.3*sh |while read i;do doqsub ${i};done
+ls test1.3*sh |while read i;do Doqsub ${i};done
 ```
 
 #Label=b qsub=no  [yes,no,yet] ncpus=1 mem=2G workpath=%(outdir)s/2 #host=                   #以commands调用,commands.getstatusoutput
