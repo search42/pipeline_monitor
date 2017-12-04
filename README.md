@@ -33,7 +33,7 @@ $ run_pipeline
     - 输出目录**workpath**; default='上一命令的workpath' or 'outdir'
 
 2. [参数配置文件](https://github.com/search42/pipeline_monitor/blob/master/test/test_config.txt)
-  以 *key*=*value* 的形式指定流程中的参数；可以**[group]**来对参数进行分组。
+    以 *key*=*value* 的形式指定流程中的参数；可以**[group]**来对参数进行分组。
 
 总的结果会输出在**outdir**下，每步的结果在**workpath**中。
 

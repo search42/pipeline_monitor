@@ -37,7 +37,7 @@ if __name__ == "__main__":
 			packages            = package_list,                               # 14行 定义的变量
 			package_dir         = package_dir,                                # 15行 定义的变量
 			scripts             = scripts,
-			data_files          = ['test/test_config.txt','test_pipe_parameter.txt'],                                         # 包需要带的数据文件
+			#data_files          = ['test/test_config.txt','test_pipe_parameter.txt'],                                         # 包需要带的数据文件
 			#ext_modules         = extensions,                                 # 扩展，见22行
 			setup_requires      = ['numpy >= 1.9.2']                         # build 时需要环境满足的依赖包，setuptools 会自动检查
 			
